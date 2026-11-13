@@ -348,7 +348,7 @@ if [[ $use_decoder -eq 1 ]] && ! command -v lte_sib_decoder >/dev/null; then
 fi
 # scripts updated by git pull, image not rebuilt: the old decoder rejects the new
 # options and every cell silently fell back to srsue (a 1:30 run took 10 min)
-if [[ $use_decoder -eq 1 ]] && ! lte_sib_decoder -h 2>&1 | grep -q -- "^ *-A "; then
+if [[ $use_decoder -eq 1 ]] && ! HOME=/tmp lte_sib_decoder -h 2>&1 | grep -q -- "^ *-A "; then
   echo "WARNING: lte_sib_decoder in the image is older than the scripts (no -A):"
   echo "WARNING: rebuild it (docker compose build) and restart the web app; using srsue"
   use_decoder=0
@@ -356,7 +356,7 @@ fi
 if [[ $keep_decoder -eq 1 ]]; then
   if [[ $use_decoder -ne 1 ]]; then
     keep_decoder=0
-  elif ! lte_sib_decoder -h 2>&1 | grep -q -- "^ *-D "; then
+  elif ! HOME=/tmp lte_sib_decoder -h 2>&1 | grep -q -- "^ *-D "; then
     echo "WARNING: lte_sib_decoder in the image has no daemon mode (-D): rebuild the image; not keeping it open"
     keep_decoder=0
   fi
@@ -537,6 +537,13 @@ fi
 # srsue's FFTW plans: computed once per machine and saved (see fftw-warmup.sh);
 # without them srsue can't start within the per-cell timeout on a new machine
 [[ $use_decoder -eq 0 ]] && /vol/helpers/fftw-warmup.sh "$SRSUECFG"
+# the decoder's too: without plans its first carrier of each bandwidth spends 1-2 min
+# planning FFTs on ARM64 (README decision 62). A second or two once they are saved.
+# HOME=/tmp for the help check: older decoders wrote an empty plan file at exit.
+if [[ $use_decoder -eq 1 ]] && HOME=/tmp lte_sib_decoder -h 2>&1 | grep -q -- "^ *-w "; then
+  echo "FFT plans for the decoder (computed once, then saved):"
+  lte_sib_decoder -w -A "$nof_rx" 2>&1 | grep --line-buffered -E "FFT plans|rror"
+fi
 
 task=$initial_task
 while true; do

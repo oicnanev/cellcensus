@@ -28,6 +28,7 @@
 #include <cstring>
 #include <ctime>
 #include <fcntl.h>
+#include <fftw3.h>
 #include <getopt.h>
 #include <sys/select.h>
 #include <unistd.h>
@@ -67,6 +68,7 @@ struct args_t {
   uint32_t    nof_rx      = 1;   // -A 2: RX1 + RX2 (bladeRF), combined by ue_dl
   std::string daemon_prefix   = ""; // -D: serve <prefix>.in / <prefix>.out (FIFOs) instead of stdin/stdout
   double      idle_s          = 600; // -I: daemon exits after this long without a command
+  bool        warmup          = false; // -w: only compute and save the FFT plans (no SDR)
 };
 
 static void usage(const char* prog)
@@ -87,14 +89,16 @@ static void usage(const char* prog)
          "  -A N        receive antennas: 1 (RX1) or 2 (RX1 + RX2, diversity)\n"
          "  -D PREFIX   daemon (implies -s): commands on PREFIX.in, answers on PREFIX.out (FIFOs),\n"
          "              pid in PREFIX.pid; commands also: hello, quit, rec <file> <hz> <s> <gain>\n"
-         "  -I S        daemon: close the SDR and exit after S seconds without a command (default 600)\n",
+         "  -I S        daemon: close the SDR and exit after S seconds without a command (default 600)\n"
+         "  -w          compute and save the FFT plans for every bandwidth (no SDR), then exit: the\n"
+         "              first carrier of each bandwidth otherwise spends 1-2 minutes planning on ARM64\n",
          prog, prog);
 }
 
 static void parse_args(args_t& a, int argc, char** argv)
 {
   int opt;
-  while ((opt = getopt(argc, argv, "e:so:g:d:a:r:t:1:T:l:vA:D:I:h")) != -1) {
+  while ((opt = getopt(argc, argv, "e:so:g:d:a:r:t:1:T:l:vA:D:I:wh")) != -1) {
     switch (opt) {
       case 'e': a.earfcn = atoi(optarg); break;
       case 's': a.server = true; break;
@@ -110,13 +114,15 @@ static void parse_args(args_t& a, int argc, char** argv)
       case 'v': a.verbose = true; break;
       case 'D': a.daemon_prefix = optarg; a.server = true; break;
       case 'I': a.idle_s = atof(optarg); break;
+      case 'w': a.warmup = true; break;
       case 'A': a.nof_rx = std::min(std::max(atoi(optarg), 1), MAX_RX); break;
-      default: usage(argv[0]); exit(opt == 'h' ? 0 : 1);
+      default: usage(argv[0]); fflush(nullptr); _exit(opt == 'h' ? 0 : 1); // not exit(): see wisdom_save
     }
   }
-  if (!a.server && a.earfcn < 0) {
+  if (!a.server && a.earfcn < 0 && !a.warmup) {
     usage(argv[0]);
-    exit(1);
+    fflush(nullptr); // stdout too: _exit does not flush
+    _exit(1);
   }
 }
 
@@ -157,6 +163,30 @@ static void log_content(FILE* f, const T& msg)
  * Samples come from the SDR, or from a capture in RAM (wide mode: several
  * carriers decoded from one capture). From RAM they are shifted in frequency
  * (carrier to baseband) before the decimation, and time is counted in samples. */
+// FFT plans. srsRAN computes them with FFTW_MEASURE (1-2 minutes per bandwidth on
+// ARM64) and writes them to ~/.srsran_fftwisdom when the process exits, but it does
+// not read the file back into a process that never planned anything: any short-lived
+// lte_sib_decoder (-h, a usage error) then overwrote the saved plans with an empty
+// set, and a killed one never saved. So: read the file at start, merge and write it
+// ourselves after planning and at the end.
+static std::string wisdom_path()
+{
+  const char* home = getenv("HOME");
+  return std::string(home ? home : "/root") + "/.srsran_fftwisdom";
+}
+static void wisdom_load()
+{
+  fftwf_import_wisdom_from_filename(wisdom_path().c_str()); // adds to what is in memory
+}
+static void wisdom_save()
+{
+  std::string tmp = wisdom_path() + ".tmp";
+  wisdom_load(); // another process may have added plans meanwhile
+  if (fftwf_export_wisdom_to_filename(tmp.c_str())) {
+    rename(tmp.c_str(), wisdom_path().c_str());
+  }
+}
+
 struct rx_t {
   srsran_rf_t            rf       = {};
   uint32_t               nof_rx   = 1;
@@ -669,6 +699,12 @@ static const char* process_carrier(rx_t&         rx,
     fprintf(stderr, "Error initialising the PHY\n");
     return "error";
   }
+  {
+    static std::set<uint32_t> saved_prb; // new bandwidth: its plans were just computed
+    if (saved_prb.insert(cell.nof_prb).second) {
+      wisdom_save();
+    }
+  }
   ue_sync.cfo_current_value        = cfo / 15000;
   ue_sync.cfo_is_copied            = true;
   ue_sync.cfo_correct_enable_find  = true;
@@ -820,6 +856,76 @@ static const char* process_carrier(rx_t&         rx,
   }
   free(data[0]);
   return status;
+}
+
+// Build (and free) the PHY objects of every bandwidth, as run_carrier does, so that
+// their FFT plans are computed now, without an SDR, and saved
+static void warm_plans(uint32_t nof_rx)
+{
+  static const uint32_t prbs[] = {6, 15, 25, 50, 100}; // 1.4, 3, 5, 10, 20 MHz
+  srsran_use_standard_symbol_size(true); // as main(): FFT sizes 128 ... 2048, the ones run_carrier plans
+  std::set<uint32_t>    ratios;
+  rx_t                  rx; // handle for the receive callbacks, which are never called here
+  rx.nof_rx             = nof_rx;
+  double                t_all = now_s();
+  for (uint32_t prb : prbs) {
+    double        t0   = now_s();
+    int           srate = srsran_sampling_freq_hz(prb);
+    uint32_t      ratio = srate > 0 ? (uint32_t)(30.72e6 / srate + 0.5) : 1;
+    srsran_cell_t cell  = {};
+    cell.id             = 1;
+    cell.nof_prb        = prb;
+    cell.nof_ports      = 2;
+    cell.cp             = SRSRAN_CP_NORM;
+    cell.frame_type     = SRSRAN_FDD;
+    cell.phich_length   = SRSRAN_PHICH_NORM;
+    cell.phich_resources = SRSRAN_PHICH_R_1;
+    // software decimation from the bladeRF's fixed 30.72 MSPS
+    if (ratio > 1 && ratios.insert(ratio).second) {
+      srsran_resampler_fft_t dec[MAX_RX] = {};
+      for (uint32_t c = 0; c < nof_rx; c++) {
+        if (srsran_resampler_fft_init(&dec[c], SRSRAN_RESAMPLER_MODE_DECIMATE, ratio) == 0) {
+          srsran_resampler_fft_free(&dec[c]);
+        }
+      }
+    }
+    cf_t* sf_buf[SRSRAN_MAX_PORTS] = {};
+    for (uint32_t c = 0; c < nof_rx; c++) {
+      sf_buf[c] = srsran_vec_cf_malloc(3 * SRSRAN_SF_LEN_PRB(prb));
+    }
+    srsran_ue_sync_t ue_sync;
+    srsran_ue_mib_t  ue_mib;
+    srsran_ue_dl_t   ue_dl;
+    if (srsran_ue_sync_init_multi_decim(&ue_sync, prb, false, recv_cb, nof_rx, &rx, 0) == 0) {
+      srsran_ue_sync_set_cell(&ue_sync, cell);
+      srsran_ue_sync_free(&ue_sync);
+    }
+    if (srsran_ue_mib_init(&ue_mib, sf_buf[0], prb) == 0) {
+      srsran_ue_mib_set_cell(&ue_mib, cell);
+      srsran_ue_mib_free(&ue_mib);
+    }
+    if (srsran_ue_dl_init(&ue_dl, sf_buf, prb, nof_rx) == 0) {
+      srsran_ue_dl_set_cell(&ue_dl, cell);
+      srsran_ue_dl_free(&ue_dl);
+    }
+    if (prb == 6) { // cell search at 1.92 MSPS
+      srsran_ue_cellsearch_t cs;
+      srsran_ue_mib_sync_t   mib_sync;
+      if (srsran_ue_cellsearch_init_multi(&cs, SRSRAN_DEFAULT_MAX_FRAMES_PSS, recv_cb, nof_rx, &rx) == 0) {
+        srsran_ue_cellsearch_free(&cs);
+      }
+      if (srsran_ue_mib_sync_init_multi(&mib_sync, recv_cb, nof_rx, &rx) == 0) {
+        srsran_ue_mib_sync_free(&mib_sync);
+      }
+    }
+    for (uint32_t c = 0; c < nof_rx; c++) {
+      free(sf_buf[c]);
+    }
+    wisdom_save();
+    printf("FFT plans for %u PRB: %.1f s\n", prb, now_s() - t0);
+    fflush(stdout);
+  }
+  printf("FFT plans saved in %s (%.1f s)\n", wisdom_path().c_str(), now_s() - t_all);
 }
 
 static const char* run_carrier(rx_t&         rx,
@@ -1119,6 +1225,11 @@ int main(int argc, char** argv)
 {
   args_t args;
   parse_args(args, argc, argv);
+  wisdom_load();
+  if (args.warmup) {
+    warm_plans(args.nof_rx);
+    return 0;
+  }
   if (!args.daemon_prefix.empty()) {
     // daemon: commands arrive on <prefix>.in, answers go to <prefix>.out. Both FIFOs are
     // opened read/write so that clients coming and going never give EOF or SIGPIPE
@@ -1218,5 +1329,6 @@ int main(int argc, char** argv)
 
   srsran_rf_stop_rx_stream(&rx.rf);
   srsran_rf_close(&rx.rf);
+  wisdom_save();
   return ret;
 }

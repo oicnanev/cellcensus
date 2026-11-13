@@ -1535,6 +1535,39 @@ Changes in this fork, newest last, with the reason for each.
     container starts, so a board plugged in after that is not visible inside
     until `sudo systemctl restart cellcensus-webapp`; the message says so.
 
+62. **The decoder's FFT plans are saved and pre-computed** (2026-11-13). After a
+    reboot a web app run took 6:26 instead of ~1:20. The log showed it: the
+    first carrier of each bandwidth took 70-90 s (EARFCN 6200, 10 MHz: 93 s;
+    3475, 5 MHz: 69 s), the next ones of the same bandwidth 0.5 s. srsRAN
+    computes FFTW plans with `FFTW_MEASURE` (very slow on ARM64) and writes
+    them to `~/.srsran_fftwisdom` when the process exits; `lte_sib_decoder`
+    never kept them, for two reasons found by experiment:
+    - srsRAN does not read the file into a process that has planned nothing, so
+      any short-lived `lte_sib_decoder` overwrote the saved plans with an
+      empty set when it exited. `sib-scan.sh` runs `lte_sib_decoder -h` twice
+      at start (is the decoder new enough?): every scan wiped them. A decoder
+      killed instead of closed (reboot, `kill -9`) never saved either; only the
+      10-minute idle exit did, so only back-to-back runs, with the daemon still
+      warm, were fast (that is what the ~1:20 measurements were).
+    - nothing ran the planning ahead, as `fftw-warmup.sh` does for srsue.
+
+    Now the decoder reads the file at start, merges and writes it after
+    planning a new bandwidth and at exit, and `-h`/usage errors `_exit`
+    without touching it (`sib-scan.sh` also runs its checks with `HOME=/tmp`,
+    which protects the plans with an old decoder binary too). New
+    `lte_sib_decoder -w` builds the PHY objects of every bandwidth (1.4, 3,
+    5, 10, 20 MHz; ue_sync/MIB/ue_dl, the decimators of the 30.72 MSPS stream and the
+    cell search) without an SDR; `sib-scan.sh` runs it at start when the
+    decoder is used. Measured on the ARM64 VM from an empty plan file: 374 s,
+    once (86/85/80/63/61 s per bandwidth); with the plans saved, 0.26 s. The
+    plans live in the `cellcensus_srsran-home` volume, so they survive
+    container recreation and reboots; a new machine or a deleted volume pays the
+    ~6 minutes once, with progress lines in the run log. The 15 MHz bandwidth
+    is not warmed up (the daemon's fixed 30.72 MSPS is not a multiple of its
+    23.04 MSPS). A first attempt passed a null handle to `srsran_ue_sync_init`,
+    which fails silently (rc -2): the warm-up looked instant (0.3 s) and had
+    planned nothing; the per-bandwidth times above are what shows it works.
+
     2G through the daemon, first 6 runs (2026-10-07): 33-38 cells per run
     (29 before), but only 4, 8, 20, 3, 5, 1 of them with a CGI (SI3), against
     23-24 of 25-30 with `bladeRF-cli`; a strong cell (ARFCN 15, -79 dBm) never
