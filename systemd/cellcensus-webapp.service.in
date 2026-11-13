@@ -1,6 +1,6 @@
 # Installed by systemd/install-service.sh, which fills in @PROJECT_DIR@ and @DOCKER@.
 [Unit]
-Description=LTE SIB scanner web app (http://localhost:8080)
+Description=CellCensus web app (http://localhost:8080)
 Documentation=file://@PROJECT_DIR@/README.md
 Requires=docker.service
 After=docker.service

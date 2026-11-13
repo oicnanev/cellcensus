@@ -1,7 +1,10 @@
-# LTE cell scanner and MIB/SIB parser
+# CellCensus
 
-Passively finds LTE cells and decodes their broadcast system information
-(MIB, SIB1–SIB13) with an SDR, storing everything in SQLite. It combines
+*Formerly "LTE cell scanner and MIB/SIB parser" (repository `lte-sib-parser`).*
+
+Passively finds cellular cells (LTE and GSM) and decodes their broadcast
+system information (LTE MIB, SIB1–SIB13; GSM system information) with an SDR,
+storing everything in SQLite, with the location of each reading. It combines
 srsRAN's `cell_search` with a patched, **receive-only** `srsue` (and, with a
 bladeRF, its own decoder). GSM cells (2G, 900/1800 MHz) are read too: see
 [2G (GSM)](#2g-gsm).
@@ -188,8 +191,8 @@ sudo modprobe -r dvb_usb_rtl28xxu rtl2832
 ## Build and run
 
 ```bash
-git clone https://github.com/oicnanev/lte-sib-parser.git
-cd lte-sib-parser
+git clone https://github.com/oicnanev/cellcensus.git
+cd cellcensus
 docker compose build        # compiles srsRAN, takes a while
 ```
 
@@ -215,7 +218,7 @@ Results are written to `vol/output/` (ignored by git).
 changed (the decoders and srsRAN patches are compiled into it), then restart
 the web app:
 ```bash
-git pull && docker compose build && sudo systemctl restart lte-sib-parser-webapp
+git pull && docker compose build && sudo systemctl restart cellcensus-webapp
 ```
 The scripts in `vol/` are used straight from the checkout, so without the
 rebuild they can ask the old binaries for options they do not have;
@@ -507,15 +510,15 @@ To start the web app automatically when the machine boots:
 docker compose build                   # the service does not build the image
 sudo systemd/install-service.sh        # install, enable and start
 ```
-The script writes `/etc/systemd/system/lte-sib-parser-webapp.service` from
-`systemd/lte-sib-parser-webapp.service.in` (filling in this folder and the path
+The script writes `/etc/systemd/system/cellcensus-webapp.service` from
+`systemd/cellcensus-webapp.service.in` (filling in this folder and the path
 of `docker`), enables `docker.service`, and enables and starts the unit, which
 runs `docker compose up --no-build webapp` in this folder after Docker starts.
 
 ```bash
-systemctl status lte-sib-parser-webapp
-journalctl -u lte-sib-parser-webapp -f          # server log
-sudo systemctl stop lte-sib-parser-webapp       # stop until next boot
+systemctl status cellcensus-webapp
+journalctl -u cellcensus-webapp -f          # server log
+sudo systemctl stop cellcensus-webapp       # stop until next boot
 sudo systemd/install-service.sh --uninstall     # remove
 ```
 Moving the project folder requires running the install script again. Stop a
@@ -1488,6 +1491,31 @@ Changes in this fork, newest last, with the reason for each.
     times, those carriers are queued again) and the web app opens it again
     in the next run after 10 s (3 runs in a row with exit 3 before it gives
     up). Whether a reopen revives a board in that state is not known yet.
+
+60. **Project renamed to CellCensus** (2026-11-13). The tool no longer reads
+    only LTE (GSM since decision 22/2G), so "LTE SIB parser" was wrong. What
+    changed, and what did not:
+    - Web app: title, header and CSV export name (`cellcensus_*.csv`). The
+      favicon/logo is a generic cell mast with no text, so it stays.
+    - Docker: image `cellcensus-worker` (was `lte-sib-parser-worker`);
+      `docker-compose.yml` now sets `name: cellcensus`, so containers and the
+      FFTW volume are `cellcensus_*` whatever the checkout folder is called
+      (the volume was `<folder>_srsran-home`, i.e. it silently changed with a
+      folder rename and a fresh volume costs ~20 min of planning on ARM64).
+    - systemd: unit `cellcensus-webapp.service`; `install-service.sh` removes
+      the old `lte-sib-parser-webapp.service` and its container (they hold
+      port 8080).
+    - Not renamed: `sib-scan.sh`, `lte_sib_decoder`, `sib_logger.patch` and
+      the scripts, which describe components, not the project; code comments in
+      the patches; the `upstream` remote and the credit links to
+      [godfuzz3r/lte-sib-parser](https://github.com/godfuzz3r/lte-sib-parser),
+      which is somebody else's repository and keeps its name.
+    - Migrating an existing install: `docker tag lte-sib-parser-worker
+      cellcensus-worker` (or rebuild), copy the old volume if it has plans
+      (`docker volume create cellcensus_srsran-home`, then `cp -a` between the
+      two volumes in a throw-away container), `sudo systemd/install-service.sh`.
+      After renaming the GitHub repository: `git remote set-url origin
+      https://github.com/oicnanev/cellcensus.git` (the old URL redirects).
 
     2G through the daemon, first 6 runs (2026-10-07): 33-38 cells per run
     (29 before), but only 4, 8, 20, 3, 5, 1 of them with a CGI (SI3), against

@@ -4,7 +4,8 @@
 #   sudo systemd/install-service.sh --uninstall  stop, disable and remove
 set -euo pipefail
 
-NAME=lte-sib-parser-webapp.service
+NAME=cellcensus-webapp.service
+OLD_NAME=lte-sib-parser-webapp.service   # name before the project was renamed
 UNIT=/etc/systemd/system/$NAME
 HERE=$(cd "$(dirname "$0")" && pwd)
 PROJECT_DIR=$(dirname "$HERE")
@@ -22,13 +23,22 @@ if [[ ${1:-} == "--uninstall" ]]; then
 fi
 
 DOCKER=$(command -v docker) || { echo "docker not found"; exit 1; }
-if ! "$DOCKER" image inspect lte-sib-parser-worker >/dev/null 2>&1; then
-    echo "image lte-sib-parser-worker not found: run 'docker compose build' in $PROJECT_DIR first"
+if ! "$DOCKER" image inspect cellcensus-worker >/dev/null 2>&1; then
+    echo "image cellcensus-worker not found: run 'docker compose build' in $PROJECT_DIR first"
     exit 1
 fi
 
+# Migration from the old name: stop and remove the old unit and its container
+# (it still holds port 8080), otherwise the new web app cannot start.
+if [[ -e /etc/systemd/system/$OLD_NAME ]]; then
+    systemctl disable --now "$OLD_NAME" 2>/dev/null || true
+    rm -f "/etc/systemd/system/$OLD_NAME"
+    "$DOCKER" rm -f lte-sib-parser-webapp-1 >/dev/null 2>&1 || true
+    echo "removed old unit $OLD_NAME"
+fi
+
 sed -e "s|@PROJECT_DIR@|$PROJECT_DIR|g" -e "s|@DOCKER@|$DOCKER|g" \
-    "$HERE/lte-sib-parser-webapp.service.in" > "$UNIT"
+    "$HERE/cellcensus-webapp.service.in" > "$UNIT"
 systemctl enable docker.service
 systemctl daemon-reload
 systemctl enable --now "$NAME"

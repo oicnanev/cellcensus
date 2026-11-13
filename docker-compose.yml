@@ -1,6 +1,9 @@
+# fixed project name: volume and containers are cellcensus_* whatever the folder is called
+name: cellcensus
+
 x-sdr: &sdr
   build: ./worker/
-  image: lte-sib-parser-worker
+  image: cellcensus-worker
   privileged: true
   # gsm_scan.py keeps its wide captures and channel buffers in /dev/shm (64 MB by default)
   shm_size: "2gb"

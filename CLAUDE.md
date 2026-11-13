@@ -4,7 +4,8 @@ Guidance for Claude Code when working in this repository.
 
 ## Project overview
 
-LTE cell scanner + MIB/SIB parser. Combines srsRAN's `cell_search` with a patched
+**CellCensus** (formerly lte-sib-parser; renamed 2026-11-13, README decision 60):
+cellular cell scanner (LTE + GSM) and MIB/SIB parser. Combines srsRAN's `cell_search` with a patched
 `srsue` (TX disabled by `worker/rx_only.patch`) to passively decode broadcast system information from LTE
 cells and store it in SQLite.
 
@@ -96,7 +97,7 @@ cannot be tested end-to-end without it.
 - RTL-SDR (RTL2838): only useful for `cell_search`/MIB (≤2.4 MSPS, ≤1.75 GHz).
   DVB kernel modules are blacklisted on the host.
 - Host: Arch Linux; bands of interest: B20, B8, B3, B1, B7.
-- Repo is a public fork (origin = oicnanev/lte-sib-parser, upstream =
+- Repo is a public fork (origin = oicnanev/cellcensus, upstream =
   godfuzz3r/lte-sib-parser). Never commit scan results, PCIs, TACs or other
   location-identifying data.
 
@@ -177,8 +178,8 @@ cannot be tested end-to-end without it.
    `-x` skips carriers already read — B28 overlaps B20); gain ≥1 GHz field.
 10. ✅ systemd: `systemd/install-service.sh` installs a unit running
     `docker compose up --no-build webapp`. Installed on the user's machine on
-    2026-09-26 (`lte-sib-parser-webapp.service`, enabled, docker enabled);
-    after code changes: `sudo systemctl restart lte-sib-parser-webapp`.
+    2026-09-26 (`cellcensus-webapp.service` (was lte-sib-parser-webapp), enabled, docker enabled);
+    after code changes: `sudo systemctl restart cellcensus-webapp`.
     Boot autostart confirmed after a reboot on 2026-09-26 (up 13 s after boot).
 11. ✅ Web app: Auto/Light/Dark theme, stopwatch (run + band, last run), scan
     durations. PSS/SSS checks parallel (ProcessPool, 8 cores), one 90 ms

@@ -18,4 +18,4 @@ docker run \
   -e DISPLAY=unix$DISPLAY \
   -u root \
   -v /run/user/1000/pulse:/run/user/1000/pulse \
-  lte-sib-parser-worker
+  cellcensus-worker

@@ -282,7 +282,7 @@ def export_csv(scan_id=None):
         r[rat] = r[rat] or "LTE"  # NULL means LTE in the database
         w.writerow(r)
     stamp = time.strftime("%Y%m%d-%H%M")
-    name = "lte-sib-parser_%s_%s.csv" % ("scan-%d" % scan_id if scan_id is not None else "all", stamp)
+    name = "cellcensus_%s_%s.csv" % ("scan-%d" % scan_id if scan_id is not None else "all", stamp)
     return name, out.getvalue().encode()
 
 
@@ -782,7 +782,7 @@ def stop_scan():
 # --- HTTP ---
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "lte-sib-parser"
+    server_version = "CellCensus"
 
     def log_message(self, fmt, *a):
         pass
@@ -958,7 +958,7 @@ def main():
         threading.Thread(target=target, daemon=True).start()
     srv = ThreadingHTTPServer((a.host, a.port), Handler)
     srv.daemon_threads = True
-    print("lte-sib-parser web app on http://%s:%d" % (a.host, a.port), flush=True)
+    print("CellCensus web app on http://%s:%d" % (a.host, a.port), flush=True)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
