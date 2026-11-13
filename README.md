@@ -1517,6 +1517,24 @@ Changes in this fork, newest last, with the reason for each.
       After renaming the GitHub repository: `git remote set-url origin
       https://github.com/oicnanev/cellcensus.git` (the old URL redirects).
 
+61. **`sib-scan.sh -d bladeRF` aborts when the board is not on the USB bus**
+    (2026-11-13). After a reboot the bladeRF did not enumerate (it was gone
+    from the host's `lsusb`), and a web app run still started: the decoder
+    could not open the board, `sib-scan.sh` fell back to srsue, which could
+    not either, and `parse_save_sib.py` waited the full `-t 45` s for a MIB on
+    every EARFCN (the 23-EARFCN preset would have taken ~17 min instead of
+    ~70 s, and produced nothing). Now, before registering the scan, the script
+    looks for USB vendor `2cf0` (Nuand) in `/sys/bus/usb/devices/*/idVendor`,
+    prints what to do and exits with code 3, the "SDR lost" code the web app
+    already handles (a repeating run retries a few times, then gives up).
+    sysfs and not `bladeRF-cli -p`/libbladeRF: they open the board, which is
+    what makes a bladeRF drop off a VM's USB bus (decision 59). It only tells
+    "present on the bus": a board that is there but stuck (libusb timeouts) is
+    still handled by the USB-error logic of decision 59. Compose mounts
+    `/dev/bus` with `devices:`, i.e. copies the device nodes when the
+    container starts, so a board plugged in after that is not visible inside
+    until `sudo systemctl restart cellcensus-webapp`; the message says so.
+
     2G through the daemon, first 6 runs (2026-10-07): 33-38 cells per run
     (29 before), but only 4, 8, 20, 3, 5, 1 of them with a CGI (SI3), against
     23-24 of 25-30 with `bladeRF-cli`; a strong cell (ARFCN 15, -79 dBm) never

@@ -386,6 +386,21 @@ if [[ $do_sweep -ne 0 && -z $known_list && $wide_scan -eq 0 ]]; then
   fi
 fi
 
+# bladeRF: stop at once if the board is not on the USB bus. Without it every
+# carrier waited for a MIB that could not come (-t 45 s each: a 70 s run took
+# ~17 min). Looks at the USB vendor id (Nuand, 2cf0) in sysfs: it does not open
+# the board, which is what makes a bladeRF drop off a VM's USB bus. Exit code 3
+# like "the SDR stopped answering": the web app handles both the same way.
+if [[ ${device_name,,} == "bladerf" ]] && compgen -G "/sys/bus/usb/devices/*/idVendor" >/dev/null; then
+  if ! grep -qix 2cf0 /sys/bus/usb/devices/*/idVendor 2>/dev/null; then
+    echo "ERROR: no bladeRF on the USB bus (USB vendor 2cf0 not found)."
+    echo "ERROR: unplug and replug it, preferably in a USB 3 port (in a VM also re-attach it);"
+    echo "ERROR: if the web app is running, 'sudo systemctl restart cellcensus-webapp' makes"
+    echo "ERROR: its container see a board plugged in after it started."
+    exit 3
+  fi
+fi
+
 # register the scan first, so a scan stopped during calibration or sweep is recorded too
 ppm_arg=()
 [[ $ppm != "auto" ]] && ppm_arg=(--ppm "$ppm")
